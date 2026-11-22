@@ -70,13 +70,16 @@ NORMAL_BINDINGS = {
     "kb-row-down": MOVE_KEYS["kb-row-down"] + ["j"],
     "kb-row-up": MOVE_KEYS["kb-row-up"] + ["k"],
     "kb-row-first": ["Home", "KP_Home", "g"],
-    "kb-row-last": ["End", "KP_End", "Shift+g"],
+    "kb-row-last": ["End", "KP_End", "G"],
     "kb-page-next": ["Page_Down", "Control+d"],
     "kb-page-prev": ["Page_Up", "Control+u"],
     "kb-accept-entry": ["Return", "KP_Enter", "l"],
 }
-# rofi key -> action; each gets a kb-custom-N slot. Capitals must be written
-# Shift+<letter>: rofi doesn't match "W".
+# rofi key -> action; each gets a kb-custom-N slot. Capitals are written as
+# the capital letter ("W"), not "Shift+w": rofi matches the symbol the layout
+# produces, and on a real keyboard Shift is used up making the capital.
+# (Virtual keyboards like wtype send "w" + Shift instead, so they can't be
+# used to test these.)
 NORMAL_ACTIONS = {
     "i": "insert",
     "slash": "insert",
@@ -85,8 +88,8 @@ NORMAL_ACTIONS = {
     "c": "channel",
     "s": "subscribe",
     "y": "copy",
-    "Shift+w": "view-later",
-    "Shift+s": "view-subs",
+    "W": "view-later",
+    "S": "view-subs",
     "r": "refresh",
     "h": "back",
     "q": "quit",
