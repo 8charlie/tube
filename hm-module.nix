@@ -7,7 +7,7 @@
   cfg = config.programs.tube;
 in {
   options.programs.tube = {
-    enable = lib.mkEnableOption "tube, a rofi front-end for YouTube";
+    enable = lib.mkEnableOption "tube, a Quickshell front-end for YouTube";
 
     mpvPackage = lib.mkOption {
       type = lib.types.package;

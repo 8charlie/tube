@@ -1,6 +1,6 @@
 # tube
 
-A rofi front-end for YouTube that plays everything in mpv.
+A Quickshell front-end for YouTube that plays everything in mpv.
 
 - **Feed:** your subscriptions, newest first, from YouTube's per-channel RSS
   feeds. No API key and no Invidious/Piped instance; shorts are left out.
@@ -50,8 +50,28 @@ Insert mode:
 | Ctrl+j / Ctrl+k | down / up |
 | Ctrl+h / Ctrl+l | cursor left / right |
 
-rofi has no modes of its own, so tube runs it with different key bindings
-per mode and reopens it when you switch.
+The mouse works too: click a row to select it, double-click to play.
+
+## Front-end
+
+`tube` opens a [Quickshell](https://quickshell.org) window (`qml/`) on the
+overlay layer, in the middle of the screen, with exclusive keyboard focus
+like a launcher. It runs `tube serve` as its backend and talks to it in JSON
+lines (the protocol is described in `tube.py`). Actions update rows in place,
+and search thumbnails fill in as they download.
+
+The layer-shell namespace is `tube`, so niri can give it a shadow:
+
+```kdl
+layer-rule {
+    match namespace="^tube$"
+    shadow { on; }
+    geometry-corner-radius 14
+}
+```
+
+For scripts, a running tube takes keys over IPC:
+`quickshell ipc --path <tube's qml dir> call tube key j`.
 
 ## Progress
 
@@ -96,5 +116,3 @@ refreshes the feed every `programs.tube.refreshInterval` (default `20min`).
     default) to about 1 Mbps, barely above playback speed, so mpv buffers
     only seconds ahead and stalls. `request_size` fetches 10 MB ranges like
     yt-dlp does, which come at full speed.
-- rofi sizes every row from an empty placeholder row, so rows are as tall
-  as the thumbnail is wide; that can't be fixed from the theme.

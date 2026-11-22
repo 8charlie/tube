@@ -1,5 +1,5 @@
 {
-  description = "rofi front-end for YouTube that plays everything in mpv";
+  description = "Quickshell front-end for YouTube that plays everything in mpv";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 

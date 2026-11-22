@@ -4,7 +4,7 @@
   makeWrapper,
   python3,
   mpv,
-  rofi,
+  quickshell,
   wl-clipboard,
   yt-dlp,
 }:
@@ -13,15 +13,15 @@
 runCommand "tube" {
   nativeBuildInputs = [makeWrapper];
   meta = {
-    description = "rofi front-end for YouTube that plays everything in mpv";
+    description = "Quickshell front-end for YouTube that plays everything in mpv";
     platforms = lib.platforms.linux;
     mainProgram = "tube";
   };
 } ''
   install -Dm644 ${./tube.py} $out/share/tube/tube.py
-  install -Dm644 ${./tube.rasi} $out/share/tube/tube.rasi
+  install -Dm644 -t $out/share/tube/qml ${./qml}/*.qml
   install -Dm644 ${./tube_progress.lua} $out/share/tube/tube_progress.lua
   makeWrapper ${python3}/bin/python3 $out/bin/tube \
     --add-flags "-I $out/share/tube/tube.py" \
-    --prefix PATH : ${lib.makeBinPath [mpv rofi wl-clipboard yt-dlp]}
+    --prefix PATH : ${lib.makeBinPath [mpv quickshell wl-clipboard yt-dlp]}
 ''
