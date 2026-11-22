@@ -50,17 +50,16 @@ NS = {
 
 # rofi custom key slot -> (key, action). Shown as hints under the prompt.
 KEYS = {
-    1: ("Alt+a", "audio"),
-    2: ("Alt+c", "channel"),
-    3: ("Alt+w", "later"),
-    4: ("Alt+s", "subscribe"),
-    5: ("Alt+m", "watched"),
-    6: ("Alt+y", "copy"),
-    7: ("Alt+l", "view-later"),
-    8: ("Alt+u", "view-subs"),
-    9: ("Alt+r", "refresh"),
+    1: ("Alt+c", "channel"),
+    2: ("Alt+w", "later"),
+    3: ("Alt+s", "subscribe"),
+    4: ("Alt+m", "watched"),
+    5: ("Alt+y", "copy"),
+    6: ("Alt+l", "view-later"),
+    7: ("Alt+u", "view-subs"),
+    8: ("Alt+r", "refresh"),
     # Enter on a matching row plays it; this searches for the typed text
-    10: ("Control+Return", "search"),
+    9: ("Control+Return", "search"),
 }
 ACTION_KEY = {action: key for key, action in KEYS.values()}
 
@@ -81,13 +80,12 @@ ROFI_BINDINGS = {
     "kb-move-word-back": "Control+Left",
     "kb-move-word-forward": "Control+Right",
 }
-HINTS = (
-    "⏎ play · {audio} audio · {channel} channel · {later} watch later · "
-    "{subscribe} (un)subscribe · {watched} watched · {copy} copy link\n"
-    "{view-later} watch later list · {view-subs} subscriptions · "
-    "{refresh} refresh · Ctrl+⏎ (or ⏎ with no match) searches YouTube · "
-    "Ctrl+j/k move · Esc back"
-).format(**ACTION_KEY)
+
+# Colours for the key hints, which are Pango markup and can't read the
+# theme's variables: surface0, text and mauve from tube.rasi.
+CHIP_BG = "#313244"
+CHIP_FG = "#cdd6f4"
+LABEL_FG = "#cba6f7"
 
 
 # --- storage -----------------------------------------------------------------
@@ -308,6 +306,44 @@ def duration(sec):
     return f"{h}:{m:02}:{s:02}" if h else f"{m}:{s:02}"
 
 
+def chip(key):
+    key = key.replace("Control+", "Ctrl+").replace("Return", "⏎")
+    return f"<span background='{CHIP_BG}' foreground='{CHIP_FG}'> {esc(key)} </span>"
+
+
+def hint_lines(groups):
+    """One line per (label, [(key, description)]) group. Labels are padded in
+    IBM Plex Mono so the groups line up; it has the same line height as the
+    theme's Plex Sans, which matters because rofi sizes the message as
+    lines x font height and clips anything taller (so line_height is out).
+    Tiny spacer lines keep the key chips of adjacent groups apart."""
+    width = max(len(label) for label, _ in groups) + 2
+    spacer = "\n<span size='3pt'> </span>\n"
+    return spacer.join(
+        f"<span font_family='IBM Plex Mono' foreground='{LABEL_FG}'>{label:<{width}}</span>"
+        + "   ".join(f"{chip(key)} {esc(desc)}" for key, desc in items)
+        for label, items in groups
+    )
+
+
+def feed_hints():
+    k = ACTION_KEY
+    return hint_lines([
+        ("play", [("Return", "play"), (k["search"], "search YouTube"),
+                  ("Ctrl+j/k", "move")]),
+        ("video", [(k["later"], "watch later"), (k["watched"], "mark watched"),
+                   (k["channel"], "open channel"), (k["subscribe"], "subscribe"),
+                   (k["copy"], "copy link")]),
+        ("go to", [(k["view-later"], "watch later list"),
+                   (k["view-subs"], "subscriptions"),
+                   (k["refresh"], "refresh feed"), ("Esc", "back")]),
+    ])
+
+
+def status_line(status):
+    return f"<b>{esc(status)}</b>\n" if status else ""
+
+
 def video_row(v, state, icon):
     meta = [esc(v.get("channel"))]
     if v.get("published"):
@@ -421,11 +457,9 @@ def feed_view(force_refresh=False):
     return View("refreshing…" if force_refresh else "feed", loader)
 
 
-def play(v, state, audio=False):
+def play(v, state):
     state.mark_watched(v["id"])
     args = ["mpv", "--force-window=immediate", f"--force-media-title={v['title']}"]
-    if audio:
-        args += ["--ytdl-format=bestaudio/best", "--vid=no"]
     subprocess.Popen(args + [url(v)], stdin=subprocess.DEVNULL,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True)
@@ -437,8 +471,10 @@ def subs_menu(state, stack):
     while True:
         subs = list(state.subs)
         rows = [(esc(s["name"]), None) for s in subs]
-        mesg = (status + "\n" if status else "") + \
-            f"⏎ open channel · {ACTION_KEY['subscribe']} unsubscribe · Esc back"
+        mesg = status_line(status) + hint_lines([
+            ("keys", [("Return", "open channel"),
+                      (ACTION_KEY["subscribe"], "unsubscribe"), ("Esc", "back")]),
+        ])
         action, i, _ = rofi(rows, f"subscriptions ({len(subs)})", mesg, selected)
         if action is None:
             return
@@ -458,7 +494,7 @@ def run(stack):
     status = ""
     while stack:
         view = stack[-1]
-        mesg = (f"<b>{esc(status)}</b>\n" if status else "") + HINTS
+        mesg = status_line(status) + feed_hints()
         status = ""
         shown = []
         cached = view.cache is not None
@@ -486,9 +522,6 @@ def run(stack):
             continue
         elif action == "accept":
             play(v, state)
-            return
-        elif action == "audio":
-            play(v, state, audio=True)
             return
         elif action == "channel":
             if v.get("channel_id"):

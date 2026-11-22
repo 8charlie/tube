@@ -22,7 +22,6 @@ tube import-freetube    import subscriptions, history and watch later
 | Enter | play (with typed text matching nothing: search YouTube) |
 | Ctrl+Enter | search YouTube for the typed text |
 | Ctrl+h / j / k / l | left / down / up / right |
-| Alt+a | play audio only |
 | Alt+c | open the video's channel |
 | Alt+w | add to / remove from watch later |
 | Alt+s | subscribe / unsubscribe to the video's channel |
