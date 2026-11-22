@@ -55,7 +55,7 @@ Item {
             width: 20
             height: 20
             radius: 10
-            color: Theme.mauve
+            color: Theme.accent
             Text {
                 anchors.centerIn: parent
                 text: "★"
@@ -95,7 +95,7 @@ Item {
             Rectangle {
                 width: parent.width * row.progress
                 height: parent.height
-                color: Theme.mauve
+                color: Theme.accent
             }
         }
     }

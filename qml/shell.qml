@@ -623,7 +623,7 @@ ShellRoot {
                         anchors.verticalCenter: parent.verticalCenter
                         width: Math.min(implicitWidth, bar.width * 0.4)
                         text: root.title
-                        color: Theme.mauve
+                        color: Theme.accent
                         font.family: Theme.sans
                         font.pointSize: 12
                         elide: Text.ElideRight
@@ -680,7 +680,7 @@ ShellRoot {
                         width: badgeText.implicitWidth + 16
                         height: badgeText.implicitHeight + 4
                         radius: 6
-                        color: root.mode === "insert" ? Theme.green : Theme.mauve
+                        color: root.mode === "insert" ? Theme.green : Theme.accent
                         Text {
                             id: badgeText
                             anchors.centerIn: parent

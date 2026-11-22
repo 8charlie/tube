@@ -20,7 +20,7 @@ Column {
             Text {
                 width: 64
                 text: group.modelData[0]
-                color: Theme.mauve
+                color: Theme.accent
                 font.family: Theme.mono
                 font.pointSize: 9
                 anchors.verticalCenter: parent.verticalCenter
