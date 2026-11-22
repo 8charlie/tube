@@ -70,6 +70,8 @@ textbox {
 
 listview {
     lines:        8;
+    /* stop at the top and bottom instead of wrapping around */
+    cycle:        false;
     fixed-height: true;
     scrollbar:    false;
     spacing:      2px;
