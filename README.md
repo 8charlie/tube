@@ -25,16 +25,26 @@ tube import-freetube    import subscriptions, history and watch later
 | Alt+c | open the video's channel |
 | Alt+w | add to / remove from watch later |
 | Alt+s | subscribe / unsubscribe to the video's channel |
-| Alt+m | toggle watched |
+| Alt+m | toggle watched (either way, clears the video's progress) |
 | Alt+y | copy the link |
 | Alt+l | watch later list |
 | Alt+u | subscriptions list |
 | Alt+r | refresh the feed now |
 | Esc | back / close |
 
+## Progress
+
+Videos played from tube carry a small mpv script (`tube_progress.lua`) that
+records position and duration every 10s, on quit and at the end. The feed
+shows a progress bar for unfinished videos and dims finished ones (played to
+the end, or stopped in the last 5% / 20s). mpv's own `save-position-on-quit`
+does the resuming; when tube's record is newer than mpv's (or mpv has none,
+e.g. for progress imported from FreeTube), tube passes `--start` instead.
+
 ## Files
 
-- `~/.local/share/tube/`: `subscriptions.json`, `watched.json`, `later.json`
+- `~/.local/share/tube/`: `subscriptions.json`, `watched.json`, `later.json`,
+  `progress/` (one `<position> <duration> <ended>` file per video)
 - `~/.cache/tube/`: `feed.json`, `thumbs/`
 
 ## Nix

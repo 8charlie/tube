@@ -20,6 +20,7 @@ runCommand "tube" {
 } ''
   install -Dm644 ${./tube.py} $out/share/tube/tube.py
   install -Dm644 ${./tube.rasi} $out/share/tube/tube.rasi
+  install -Dm644 ${./tube_progress.lua} $out/share/tube/tube_progress.lua
   makeWrapper ${python3}/bin/python3 $out/bin/tube \
     --add-flags "-I $out/share/tube/tube.py" \
     --prefix PATH : ${lib.makeBinPath [mpv rofi wl-clipboard yt-dlp]}

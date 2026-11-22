@@ -13,6 +13,7 @@ is mpv, which itself goes through yt-dlp.
 import argparse
 import concurrent.futures as cf
 import fcntl
+import hashlib
 import html
 import json
 import os
@@ -34,8 +35,13 @@ THUMBS = CACHE / "thumbs"
 SUBS = DATA / "subscriptions.json"
 WATCHED = DATA / "watched.json"
 LATER = DATA / "later.json"
+PROGRESS = DATA / "progress"    # one "<position> <duration> <ended>" file per video
 FEED = CACHE / "feed.json"
 THEME = Path(os.environ.get("TUBE_THEME") or Path(__file__).with_name("tube.rasi"))
+PROGRESS_SCRIPT = Path(__file__).with_name("tube_progress.lua")
+# mpv's save-position-on-quit files (the default watch-later-dir)
+MPV_WATCH_LATER = (Path(os.environ.get("XDG_STATE_HOME") or HOME / ".local/state")
+                   / "mpv/watch_later")
 
 FEED_SIZE = 250          # newest videos kept in the merged feed
 STALE = 10 * 60          # feed older than this is refreshed in the background
@@ -104,11 +110,89 @@ def save(path, data):
     os.replace(tmp, path)
 
 
+def is_finished(pos, dur, ended):
+    """Counts as watched once it played to the end or stopped in the last
+    5% (at least 20s), which is usually just the end screen."""
+    return bool(ended) or (dur > 0 and dur - pos <= max(20, 0.05 * dur))
+
+
+def load_progress():
+    progress = {}
+    for path in PROGRESS.glob("*"):
+        if path.suffix == ".tmp":
+            continue
+        try:
+            pos, dur, ended = path.read_text().split()
+            progress[path.name] = (float(pos), float(dur), ended == "1",
+                                   path.stat().st_mtime)
+        except (OSError, ValueError):
+            pass
+    return progress
+
+
+def write_progress(video_id, pos, dur, when):
+    """Record progress as of `when` (the file's mtime), so it can be compared
+    with mpv's own saved position."""
+    PROGRESS.mkdir(parents=True, exist_ok=True)
+    path = PROGRESS / video_id
+    path.write_text(f"{pos:.3f} {dur:.3f} 0\n")
+    os.utime(path, (when, when))
+
+
+def mpv_watch_later(v):
+    """mpv names its saved-position file after the MD5 of the exact URL."""
+    return MPV_WATCH_LATER / hashlib.md5(url(v).encode()).hexdigest().upper()
+
+
+def mpv_saved_position(v):
+    """(position, saved at) from mpv's watch-later file, or None."""
+    path = mpv_watch_later(v)
+    try:
+        for line in path.read_text().splitlines():
+            if line.startswith("start="):
+                return float(line[6:]), path.stat().st_mtime
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 class State:
     def __init__(self):
         self.subs = load(SUBS, [])          # [{id, name}]
-        self.watched = load(WATCHED, {})    # {video id: unix time}
+        self.watched = load(WATCHED, {})    # {video id: unix time}, marked by hand
         self.later = load(LATER, [])        # [video], newest first
+        # {video id: (position, duration, ended, saved at)}
+        self.progress = load_progress()
+
+    def duration(self, v):
+        p = self.progress.get(v["id"])
+        return v.get("duration") or (p[1] if p and p[1] > 0 else None)
+
+    def finished(self, v):
+        p = self.progress.get(v["id"])
+        return v["id"] in self.watched or bool(p and is_finished(*p[:3]))
+
+    def resume(self, v):
+        """(position, source) where an unfinished video stopped, or None.
+        tube's record and mpv's saved position can disagree (a video played
+        from FreeTube, a crash, or progress imported from FreeTube), so the
+        more recently saved one wins. source is "tube" or "mpv"."""
+        if self.finished(v):
+            return None
+        saved = []
+        p = self.progress.get(v["id"])
+        if p:
+            saved.append((p[3], p[0], "tube"))
+        m = mpv_saved_position(v)
+        if m:
+            saved.append((m[1], m[0], "mpv"))
+        if not saved:
+            return None
+        _, pos, source = max(saved)
+        dur = self.duration(v)
+        if pos < 5 or (dur and is_finished(pos, dur, False)):
+            return None
+        return pos, source
 
     def subscribed(self, channel_id):
         return any(s["id"] == channel_id for s in self.subs)
@@ -123,14 +207,22 @@ class State:
         save(SUBS, self.subs)
         return f"Subscribed to {name}; it shows up in the feed after a refresh"
 
-    def mark_watched(self, video_id, on=True):
+    def set_watched(self, v, on):
+        """Either way the video's progress is cleared, so it next plays from
+        the start: marking watched means done, unwatched means start over."""
+        for path in (PROGRESS / v["id"], mpv_watch_later(v)):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        self.progress.pop(v["id"], None)
         if on:
-            self.watched[video_id] = time.time()
+            self.watched[v["id"]] = time.time()
             if len(self.watched) > 20000:
                 keep = sorted(self.watched.items(), key=lambda kv: kv[1])[-15000:]
                 self.watched = dict(keep)
         else:
-            self.watched.pop(video_id, None)
+            self.watched.pop(v["id"], None)
         save(WATCHED, self.watched)
 
     def in_later(self, video_id):
@@ -344,14 +436,26 @@ def status_line(status):
     return f"<b>{esc(status)}</b>\n" if status else ""
 
 
+def progress_bar(pos, dur, cells=12):
+    filled = max(1, min(cells, round(cells * pos / dur)))
+    return (f"<span foreground='{LABEL_FG}' alpha='100%'>{'━' * filled}</span>"
+            f"<span alpha='30%'>{'━' * (cells - filled)}</span>")
+
+
 def video_row(v, state, icon):
     meta = [esc(v.get("channel"))]
     if v.get("published"):
         meta.append(age(v["published"]))
-    if v.get("duration"):
-        meta.append(duration(v["duration"]))
+    dur, resume = state.duration(v), state.resume(v)
+    resume = resume[0] if resume else None
+    if resume and dur:
+        meta.append(f"{progress_bar(resume, dur)} {duration(resume)} / {duration(dur)}")
+    elif resume:
+        meta.append(f"resume at {duration(resume)}")
+    elif dur:
+        meta.append(duration(dur))
     star = "★ " if state.in_later(v["id"]) else ""
-    watched = v["id"] in state.watched
+    watched = state.finished(v)
     title_alpha, meta_alpha = ("45%", "35%") if watched else ("100%", "55%")
     text = (f"<span alpha='{title_alpha}' weight='500'>{star}{esc(v['title'])}</span>\n"
             f"<span alpha='{meta_alpha}' size='small'>{' · '.join(m for m in meta if m)}</span>")
@@ -458,8 +562,22 @@ def feed_view(force_refresh=False):
 
 
 def play(v, state):
-    state.mark_watched(v["id"])
-    args = ["mpv", "--force-window=immediate", f"--force-media-title={v['title']}"]
+    PROGRESS.mkdir(parents=True, exist_ok=True)
+    args = ["mpv", "--force-window=immediate", f"--force-media-title={v['title']}",
+            f"--script={PROGRESS_SCRIPT}",
+            f"--script-opts-append=tube-id={v['id']}",
+            f"--script-opts-append=tube-progress-dir={PROGRESS}"]
+    # mpv resumes from its own saved position. When tube's record is newer
+    # (or mpv has none), drop mpv's and start where tube says; finished
+    # videos start over rather than resume near the end.
+    resume = state.resume(v)
+    if state.finished(v) or (resume and resume[1] == "tube"):
+        try:
+            mpv_watch_later(v).unlink()
+        except FileNotFoundError:
+            pass
+    if resume and resume[1] == "tube":
+        args.append(f"--start={resume[0]:.1f}")
     subprocess.Popen(args + [url(v)], stdin=subprocess.DEVNULL,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True)
@@ -535,8 +653,8 @@ def run(stack):
             if v.get("channel_id"):
                 status = state.toggle_sub(v["channel_id"], v.get("channel") or v["channel_id"])
         elif action == "watched":
-            watched = v["id"] in state.watched
-            state.mark_watched(v["id"], on=not watched)
+            watched = state.finished(v)
+            state.set_watched(v, on=not watched)
             status = "Marked unwatched" if watched else "Marked watched"
         elif action == "copy":
             subprocess.run(["wl-copy", url(v)], check=False)
@@ -580,10 +698,24 @@ def import_freetube(directory):
     state.subs.sort(key=lambda s: s["name"].casefold())
     save(SUBS, state.subs)
 
-    history = read_nedb(directory / "history.db")
-    for h in history:
-        if h.get("videoId"):
-            state.watched[h["videoId"]] = (h.get("timeWatched") or 0) / 1000
+    # FreeTube's history is every video opened, with how far it got
+    finished = partial = 0
+    for h in read_nedb(directory / "history.db"):
+        vid = h.get("videoId")
+        if not vid:
+            continue
+        pos = float(h.get("watchProgress") or 0)
+        dur = float(h.get("lengthSeconds") or 0)
+        if is_finished(pos, dur, False):
+            state.watched[vid] = (h.get("timeWatched") or 0) / 1000
+            finished += 1
+            continue
+        # imports before progress tracking marked every history entry watched
+        state.watched.pop(vid, None)
+        if pos >= 5:
+            if vid not in state.progress:
+                write_progress(vid, pos, dur, (h.get("timeWatched") or 0) / 1000)
+            partial += 1
     save(WATCHED, state.watched)
 
     later_ids = {v["id"] for v in state.later}
@@ -608,7 +740,7 @@ def import_freetube(directory):
     save(LATER, state.later)
 
     print(f"subscriptions: {added} added, {len(state.subs)} total")
-    print(f"history: {len(history)} videos marked watched")
+    print(f"history: {finished} finished, {partial} in progress")
     print(f"watch later: {later_added} added")
     print("refreshing feed…")
     refresh()
