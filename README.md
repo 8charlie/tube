@@ -88,9 +88,13 @@ refreshes the feed every `programs.tube.refreshInterval` (default `20min`).
 
 ## Notes
 
-- Fresh googlevideo URLs currently answer 403 for their first few seconds
-  and mpv gives up on the first one. Setting
-  `stream-lavf-o-append=reconnect_on_http_error=403` in `mpv.conf` makes
-  ffmpeg retry.
+- Recommended `mpv.conf` line for YouTube:
+  `stream-lavf-o=reconnect_on_http_error=403,request_size=10485760,multiple_requests=1`
+  - Fresh googlevideo URLs answer 403 for their first few seconds and mpv
+    gives up on the first one; `reconnect_on_http_error` makes ffmpeg retry.
+  - googlevideo throttles a single open-ended request (how ffmpeg streams by
+    default) to about 1 Mbps, barely above playback speed, so mpv buffers
+    only seconds ahead and stalls. `request_size` fetches 10 MB ranges like
+    yt-dlp does, which come at full speed.
 - rofi sizes every row from an empty placeholder row, so rows are as tall
   as the thumbnail is wide; that can't be fixed from the theme.
