@@ -17,20 +17,41 @@ tube import-freetube    import subscriptions, history and watch later
 
 ## Keys
 
+Vim style. tube opens in **normal mode**, where there's no text box and
+plain letters are actions. `i` (or `/`) switches to **insert mode** to type.
+
+Normal mode:
+
 | Key | Action |
 |---|---|
-| Enter | play (with typed text matching nothing: search YouTube) |
-| Ctrl+Enter | search YouTube for the typed text |
-| Ctrl+h / j / k / l | left / down / up / right |
-| Alt+c | open the video's channel |
-| Alt+w | add to / remove from watch later |
-| Alt+s | subscribe / unsubscribe to the video's channel |
-| Alt+m | toggle watched (either way, clears the video's progress) |
-| Alt+y | copy the link |
-| Alt+l | watch later list |
-| Alt+u | subscriptions list |
-| Alt+r | refresh the feed now |
-| Esc | back / close |
+| j / k | down / up (also Ctrl+j / Ctrl+k) |
+| g / G | top / bottom |
+| Ctrl+d / Ctrl+u | page down / up |
+| i or / | insert mode: filter the list or search YouTube |
+| Enter or l | play (in the subscriptions list: open the channel) |
+| w | add to / remove from watch later |
+| m | toggle watched (either way, clears the video's progress) |
+| c | open the video's channel |
+| s | subscribe / unsubscribe to the video's channel |
+| y | copy the link |
+| W | watch later list |
+| S | subscriptions list |
+| r | refresh the feed now |
+| h or Esc | back (Esc first clears an active filter) |
+| q | quit |
+
+Insert mode:
+
+| Key | Action |
+|---|---|
+| typing | filters the list |
+| Esc or Enter | back to normal mode, keeping the filter (Enter also selects the highlighted row) |
+| Enter with nothing matching, or Ctrl+Enter | search YouTube for the typed text |
+| Ctrl+j / Ctrl+k | down / up |
+| Ctrl+h / Ctrl+l | cursor left / right |
+
+rofi has no modes of its own, so tube runs it with different key bindings
+per mode and reopens it when you switch.
 
 ## Progress
 

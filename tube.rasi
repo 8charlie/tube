@@ -6,6 +6,7 @@
     text:     #cdd6f4;
     subtext:  #a6adc8;
     mauve:    #cba6f7;
+    green:    #a6e3a1;
 
     background-color: transparent;
     text-color:       @text;
@@ -35,6 +36,24 @@ inputbar {
 }
 
 prompt { text-color: @mauve; }
+
+/* normal mode: shows the current filter in place of the text box */
+textbox-filter {
+    expand:         true;
+    vertical-align: 0.5;
+    text-color:     @subtext;
+}
+
+/* vim-style NORMAL / INSERT badge; tube sets the text and insert colour */
+textbox-mode {
+    expand:           false;
+    vertical-align:   0.5;
+    padding:          2px 8px;
+    border-radius:    6px;
+    background-color: @mauve;
+    text-color:       @base;
+    font:             "IBM Plex Mono Bold 9";
+}
 
 entry {
     placeholder:       "filter, or type to search YouTube";

@@ -13,10 +13,12 @@ is mpv, which itself goes through yt-dlp.
 import argparse
 import concurrent.futures as cf
 import fcntl
+import functools
 import hashlib
 import html
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -54,37 +56,51 @@ NS = {
     "yt": "http://www.youtube.com/xml/schemas/2015",
 }
 
-# rofi custom key slot -> (key, action). Shown as hints under the prompt.
-KEYS = {
-    1: ("Alt+c", "channel"),
-    2: ("Alt+w", "later"),
-    3: ("Alt+s", "subscribe"),
-    4: ("Alt+m", "watched"),
-    5: ("Alt+y", "copy"),
-    6: ("Alt+l", "view-later"),
-    7: ("Alt+u", "view-subs"),
-    8: ("Alt+r", "refresh"),
-    # Enter on a matching row plays it; this searches for the typed text
-    9: ("Control+Return", "search"),
-}
-ACTION_KEY = {action: key for key, action in KEYS.values()}
+# --- keys --------------------------------------------------------------------
+# Vim style. Normal mode has no text box: plain letters are actions and
+# j/k etc. move. i (or /) switches to insert mode, whose text box filters the
+# list; Esc or Enter goes back to normal mode keeping the filter, and Enter
+# with nothing matching (or Ctrl+Enter) searches YouTube instead.
 
-# Ctrl+h/j/k/l act as arrow keys. rofi binds all four by default (backspace,
-# accept, delete to end of line, complete), so those lose their Ctrl variants.
-ROFI_BINDINGS = {
-    "kb-row-up": "Up,Control+p,Control+k",
-    "kb-row-down": "Down,Control+n,Control+j",
-    "kb-move-char-back": "Left,Control+b,Control+h",
-    "kb-move-char-forward": "Right,Control+f,Control+l",
-    "kb-remove-char-back": "BackSpace,Shift+BackSpace",
-    "kb-accept-entry": "Control+m,Return,KP_Enter",
-    "kb-remove-to-eol": "",
-    "kb-mode-complete": "",
-    # freed for our own keys
-    "kb-screenshot": "",
-    "kb-accept-custom": "",
-    "kb-move-word-back": "Control+Left",
-    "kb-move-word-forward": "Control+Right",
+MOVE_KEYS = {
+    "kb-row-down": ["Down", "Control+n", "Control+j"],
+    "kb-row-up": ["Up", "Control+p", "Control+k"],
+}
+NORMAL_BINDINGS = {
+    "kb-row-down": MOVE_KEYS["kb-row-down"] + ["j"],
+    "kb-row-up": MOVE_KEYS["kb-row-up"] + ["k"],
+    "kb-row-first": ["Home", "KP_Home", "g"],
+    "kb-row-last": ["End", "KP_End", "Shift+g"],
+    "kb-page-next": ["Page_Down", "Control+d"],
+    "kb-page-prev": ["Page_Up", "Control+u"],
+    "kb-accept-entry": ["Return", "KP_Enter", "l"],
+}
+# rofi key -> action; each gets a kb-custom-N slot. Capitals must be written
+# Shift+<letter>: rofi doesn't match "W".
+NORMAL_ACTIONS = {
+    "i": "insert",
+    "slash": "insert",
+    "w": "later",
+    "m": "watched",
+    "c": "channel",
+    "s": "subscribe",
+    "y": "copy",
+    "Shift+w": "view-later",
+    "Shift+s": "view-subs",
+    "r": "refresh",
+    "h": "back",
+    "q": "quit",
+}
+INSERT_BINDINGS = {
+    **MOVE_KEYS,
+    # Ctrl+h/l move the cursor like arrow keys
+    "kb-move-char-back": ["Left", "Control+b", "Control+h"],
+    "kb-move-char-forward": ["Right", "Control+f", "Control+l"],
+    "kb-accept-entry": ["Return", "KP_Enter", "Control+m"],
+}
+INSERT_ACTIONS = {
+    "Escape": "normal",
+    "Control+Return": "search",
 }
 
 # Colours for the key hints, which are Pango markup and can't read the
@@ -399,7 +415,6 @@ def duration(sec):
 
 
 def chip(key):
-    key = key.replace("Control+", "Ctrl+").replace("Return", "⏎")
     return f"<span background='{CHIP_BG}' foreground='{CHIP_FG}'> {esc(key)} </span>"
 
 
@@ -418,17 +433,29 @@ def hint_lines(groups):
     )
 
 
-def feed_hints():
-    k = ACTION_KEY
+def normal_hints(kind):
+    if kind == "channels":
+        return hint_lines([
+            ("move", [("j/k", "down/up"), ("g/G", "top/bottom"), ("i or /", "filter")]),
+            ("channel", [("⏎ or l", "open"), ("s", "unsubscribe")]),
+            ("go to", [("h or Esc", "back"), ("q", "quit")]),
+        ])
     return hint_lines([
-        ("play", [("Return", "play"), (k["search"], "search YouTube"),
-                  ("Ctrl+j/k", "move")]),
-        ("video", [(k["later"], "watch later"), (k["watched"], "mark watched"),
-                   (k["channel"], "open channel"), (k["subscribe"], "subscribe"),
-                   (k["copy"], "copy link")]),
-        ("go to", [(k["view-later"], "watch later list"),
-                   (k["view-subs"], "subscriptions"),
-                   (k["refresh"], "refresh feed"), ("Esc", "back")]),
+        ("move", [("j/k", "down/up"), ("g/G", "top/bottom"), ("Ctrl+d/u", "page"),
+                  ("i or /", "search")]),
+        ("video", [("⏎ or l", "play"), ("w", "watch later"), ("m", "mark watched"),
+                   ("c", "channel"), ("s", "subscribe"), ("y", "copy link")]),
+        ("go to", [("W", "watch later list"), ("S", "subscriptions"),
+                   ("r", "refresh feed"), ("h or Esc", "back"), ("q", "quit")]),
+    ])
+
+
+def insert_hints():
+    # three lines like normal mode's, so the window keeps its size
+    return hint_lines([
+        ("insert", [("Esc or ⏎", "done, keeping the filter"), ("Ctrl+j/k", "move")]),
+        ("search", [("Ctrl+⏎", "search YouTube"), ("⏎", "also does when nothing matches")]),
+        ("", []),
     ])
 
 
@@ -442,7 +469,7 @@ def progress_bar(pos, dur, cells=12):
             f"<span alpha='30%'>{'━' * (cells - filled)}</span>")
 
 
-def video_row(v, state, icon):
+def video_text(v, state):
     meta = [esc(v.get("channel"))]
     if v.get("published"):
         meta.append(age(v["published"]))
@@ -459,7 +486,7 @@ def video_row(v, state, icon):
     title_alpha, meta_alpha = ("45%", "35%") if watched else ("100%", "55%")
     text = (f"<span alpha='{title_alpha}' weight='500'>{star}{esc(v['title'])}</span>\n"
             f"<span alpha='{meta_alpha}' size='small'>{' · '.join(m for m in meta if m)}</span>")
-    return text, icon
+    return text
 
 
 def url(v):
@@ -468,27 +495,78 @@ def url(v):
 
 # --- rofi --------------------------------------------------------------------
 
-def rofi(rows, prompt, mesg, selected=0, filter_text=""):
+@functools.lru_cache(maxsize=None)
+def rofi_default_bindings():
+    out = subprocess.run(["rofi", "-dump-config"], capture_output=True, text=True).stdout
+    return {name: [k for k in keys.split(",") if k]
+            for name, keys in re.findall(r'(kb-[a-z0-9-]+): "([^"]*)"', out)}
+
+
+def binding_args(bindings, actions):
+    """rofi arguments for bindings plus one kb-custom-N per action key. Keys
+    we use are removed from rofi's other default bindings, since rofi
+    refuses to start with a key bound twice."""
+    wanted = dict(bindings)
+    for n, key in enumerate(actions, 1):
+        wanted[f"kb-custom-{n}"] = [key]
+    taken = {k for keys in wanted.values() for k in keys}
+    args = []
+    for name, keys in rofi_default_bindings().items():
+        kept = [k for k in keys if k not in taken]
+        if name not in wanted and kept != keys:
+            args += [f"-{name}", ",".join(kept)]
+    for name, keys in wanted.items():
+        args += [f"-{name}", ",".join(keys)]
+    return args
+
+
+def rasi_string(text):
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def mode_theme(mode, filter_text, kind="videos"):
+    """-theme-str fragments for the input bar: a text box in insert mode,
+    otherwise the current filter (or a hint); either way followed by a
+    vim-style mode badge. One quoted string per fragment: rofi's parser
+    reads from the first quote to the last one in a -theme-str."""
+    # channel lists have no thumbnails: drop the icon slot so rows are short
+    extra = (["element-icon { enabled: false; }", "listview { lines: 14; }"]
+             if kind == "channels" else [])
+    if mode == "insert":
+        return extra + ["inputbar { children: [ prompt, entry, textbox-mode ]; }",
+                        'textbox-mode { content: "INSERT"; background-color: @green; }']
+    hint = "press i to filter" if kind == "channels" else "press i to search"
+    shown = f"/{filter_text}" if filter_text else hint
+    return extra + ["inputbar { children: [ prompt, textbox-filter, textbox-mode ]; }",
+            f"textbox-filter {{ content: {rasi_string(shown)}; "
+            f"text-color: {'@text' if filter_text else '@subtext'}; }}",
+            'textbox-mode { content: "NORMAL"; }']
+
+
+def rofi(mode, rows, prompt, mesg, filter_text="", selected=0, kind="videos"):
     """Show rows (an iterable of (markup, icon path or None), consumed in a
     background thread so slow sources stream in) and return
-    (action, index, typed text). action is "accept" (a row), "custom" (typed
-    text matching no row) or one of the KEYS actions; None means Esc.
-    -selected-row makes rofi read all input before showing, so it is only
-    passed when the rows are already cached."""
-    args = [
-        "rofi", "-dmenu", "-i", "-markup-rows", "-show-icons",
-        "-sep", "\x01", "-eh", "2",
-        "-p", prompt, "-mesg", mesg, "-format", "i\tf",
-    ]
-    for name, keys in ROFI_BINDINGS.items():
-        args += [f"-{name}", keys]
+    (action, index, typed text).
+
+    Normal mode actions: "accept" (Enter/l), "back" (Esc) or a NORMAL_ACTIONS
+    action. Insert mode: "done" (Enter on a row), "search" (Enter with nothing
+    matching, or Ctrl+Enter) or "normal" (Esc). In normal mode rows must
+    already be filtered. -selected-row makes rofi read all input before
+    showing, so it is only passed when the rows are already cached."""
+    normal = mode == "normal"
+    actions = list((NORMAL_ACTIONS if normal else INSERT_ACTIONS).items())
+    args = ["rofi", "-dmenu", "-i", "-markup-rows", "-show-icons",
+            "-sep", "\x01", "-eh", "2",
+            "-p", prompt, "-mesg", mesg, "-format", "i\tf"]
+    args += binding_args(NORMAL_BINDINGS if normal else INSERT_BINDINGS,
+                         [key for key, _ in actions])
     if THEME.exists():
         args += ["-theme", str(THEME)]
-    for slot, (key, _) in KEYS.items():
-        args += [f"-kb-custom-{slot}", key]
-    if filter_text:
+    for fragment in mode_theme(mode, filter_text, kind):
+        args += ["-theme-str", fragment]
+    if not normal and filter_text:
         args += ["-filter", filter_text]
-    elif selected:
+    if normal and selected:
         args += ["-selected-row", str(selected)]
 
     proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -521,36 +599,80 @@ def rofi(rows, prompt, mesg, selected=0, filter_text=""):
     index, _, typed = out.rstrip("\n").partition("\t")
     index = int(index) if index.lstrip("-").isdigit() else -1
     if code == 0:
-        return ("accept" if index >= 0 else "custom"), index, typed
-    if 10 <= code < 10 + len(KEYS):
-        return KEYS[code - 9][1], index, typed
-    return None, index, typed
+        if normal:
+            return "accept", index, typed
+        return ("done" if index >= 0 else "search"), index, typed
+    if 10 <= code < 10 + len(actions):
+        return actions[code - 10][1], index, typed
+    # Esc in normal mode; in insert mode the remaining cancel keys (Ctrl+g)
+    return ("back" if normal else "normal"), index, typed
 
 
 # --- views -------------------------------------------------------------------
 
-class View:
-    """A list of videos shown in rofi. The loader's result is cached so
-    returning to the view after an action doesn't refetch."""
+def plain(markup):
+    return html.unescape(re.sub(r"<[^>]+>", "", markup))
 
-    def __init__(self, prompt, loader):
+
+def matches(text, filter_text):
+    """rofi's default matching: every word, case-insensitively, anywhere."""
+    text = text.casefold()
+    return all(word in text for word in filter_text.casefold().split())
+
+
+class View:
+    """A list shown in rofi: videos, or channels for the subscriptions list.
+    The loader's result is cached so returning to the view after an action
+    doesn't refetch."""
+
+    def __init__(self, prompt, loader, kind="videos"):
         self.prompt = prompt
         self.loader = loader
+        self.kind = kind
         self.cache = None
-        self.selected = 0
+        self.selected_id = None
         self.filter = ""
 
-    def rows(self, state, shown):
-        """Yield rows, appending each video to shown as its row goes out, so
-        rofi's index maps onto shown even if rofi closes mid-load."""
+    def items(self):
         if self.cache is None:
             self.cache = self.loader()
-        videos = list(self.cache)
+        return self.cache
+
+    def render(self, item, state):
+        if self.kind == "channels":
+            return esc(item["name"])
+        return video_text(item, state)
+
+    def visible(self, state, filter_text):
+        rendered = [(item, self.render(item, state)) for item in self.items()]
+        if filter_text:
+            rendered = [(i, t) for i, t in rendered if matches(plain(t), filter_text)]
+        return rendered
+
+    def selected_index(self, state):
+        """Index of the remembered row among the visible ones; only known once
+        the list is loaded."""
+        if self.cache is None or self.selected_id is None:
+            return 0
+        ids = [item["id"] for item, _ in self.visible(state, self.filter)]
+        return ids.index(self.selected_id) if self.selected_id in ids else 0
+
+    def rows(self, state, shown, filter_text=""):
+        """Yield rows matching filter_text, appending each item to shown as
+        its row goes out, so rofi's index maps onto shown even if rofi closes
+        mid-load."""
+        visible = self.visible(state, filter_text)
+        if self.kind != "videos":
+            for item, text in visible:
+                shown.append(item)
+                yield text, None
+            return
         # thumbnails download in parallel but rows are emitted in order
         with cf.ThreadPoolExecutor(16) as ex:
-            for v, icon in zip(videos, ex.map(thumb, [v["id"] for v in videos])):
+            icons = ex.map(thumb, [v["id"] for v, _ in visible])
+            for (v, text), icon in zip(visible, icons):
                 shown.append(v)
-                yield video_row(v, state, icon)
+                yield text, icon
 
 
 def feed_view(force_refresh=False):
@@ -559,6 +681,15 @@ def feed_view(force_refresh=False):
             refresh()
         return feed_videos(load(FEED, {"channels": {}}))
     return View("refreshing…" if force_refresh else "feed", loader)
+
+
+def subs_view(state):
+    return View(f"subscriptions ({len(state.subs)})", lambda: list(state.subs),
+                kind="channels")
+
+
+def channel_view(channel_id, name):
+    return View(name or "channel", lambda: channel_videos(channel_id))
 
 
 def play(v, state):
@@ -583,82 +714,85 @@ def play(v, state):
                      start_new_session=True)
 
 
-def subs_menu(state, stack):
-    """The subscriptions list: ⏎ opens a channel, Alt+s unsubscribes."""
-    status, selected = "", 0
-    while True:
-        subs = list(state.subs)
-        rows = [(esc(s["name"]), None) for s in subs]
-        mesg = status_line(status) + hint_lines([
-            ("keys", [("Return", "open channel"),
-                      (ACTION_KEY["subscribe"], "unsubscribe"), ("Esc", "back")]),
-        ])
-        action, i, _ = rofi(rows, f"subscriptions ({len(subs)})", mesg, selected)
-        if action is None:
-            return
-        if not 0 <= i < len(subs):
-            continue
-        sub, selected = subs[i], i
-        if action in ("accept", "channel"):
-            stack.append(View(sub["name"], lambda cid=sub["id"]: channel_videos(cid)))
-            return
-        if action == "subscribe":
-            status = state.toggle_sub(sub["id"], sub["name"])
-            selected = min(i, len(state.subs) - 1)
-
-
-def run(stack):
+def run(stack, mode="normal"):
     state = State()
     status = ""
     while stack:
         view = stack[-1]
-        mesg = status_line(status) + feed_hints()
-        status = ""
         shown = []
-        cached = view.cache is not None
-        action, i, typed = rofi(view.rows(state, shown), view.prompt, mesg,
-                                view.selected if cached else 0, view.filter)
+        mesg = status_line(status)
+        status = ""
+        if mode == "insert":
+            action, i, typed = rofi("insert", view.rows(state, shown), view.prompt,
+                                    mesg + insert_hints(), filter_text=view.filter,
+                                    kind=view.kind)
+        else:
+            selected = view.selected_index(state)
+            action, i, typed = rofi("normal", view.rows(state, shown, view.filter),
+                                    view.prompt, mesg + normal_hints(view.kind),
+                                    filter_text=view.filter, selected=selected,
+                                    kind=view.kind)
         if view.prompt == "refreshing…":
             view.prompt = "feed"
-        v = shown[i] if 0 <= i < len(shown) else None
-        if v:
-            view.selected, view.filter = i, typed
+        item = shown[i] if 0 <= i < len(shown) else None
+        if item:
+            view.selected_id = item["id"]
 
-        if action is None:
-            stack.pop()
-        elif action in ("custom", "search"):
-            if typed.strip():
-                view.filter = ""
-                stack.append(View(f"search: {typed.strip()}", lambda q=typed.strip(): search(q)))
+        if mode == "insert":
+            mode = "normal"
+            query = typed.strip()
+            if action == "search":
+                if query:
+                    stack.append(View(f"search: {query}", lambda q=query: search(q)))
+            else:  # Enter on a row, or Esc
+                view.filter = query
+            continue
+
+        if action == "back":
+            if view.filter:
+                view.filter = ""  # like :noh, before going back
+            else:
+                stack.pop()
+        elif action == "quit":
+            return
+        elif action == "insert":
+            mode = "insert"
         elif action == "view-later":
             stack.append(View("watch later", lambda: list(state.later)))
         elif action == "view-subs":
-            subs_menu(state, stack)
+            stack.append(subs_view(state))
         elif action == "refresh":
             stack[:] = [feed_view(force_refresh=True)]
-        elif v is None:
+        elif item is None:
             continue
+        elif view.kind == "channels":
+            if action in ("accept", "channel"):
+                stack.append(channel_view(item["id"], item["name"]))
+            elif action == "subscribe":
+                status = state.toggle_sub(item["id"], item["name"])
+                view.cache = list(state.subs)
+                view.prompt = f"subscriptions ({len(state.subs)})"
         elif action == "accept":
-            play(v, state)
+            play(item, state)
             return
         elif action == "channel":
-            if v.get("channel_id"):
-                stack.append(View(v["channel"] or "channel",
-                                  lambda cid=v["channel_id"]: channel_videos(cid)))
+            if item.get("channel_id"):
+                stack.append(channel_view(item["channel_id"], item.get("channel")))
         elif action == "later":
-            status = state.toggle_later(v)
+            status = state.toggle_later(item)
             if view.prompt == "watch later":
                 view.cache = list(state.later)
         elif action == "subscribe":
-            if v.get("channel_id"):
-                status = state.toggle_sub(v["channel_id"], v.get("channel") or v["channel_id"])
+            if item.get("channel_id"):
+                status = state.toggle_sub(item["channel_id"],
+                                          item.get("channel") or item["channel_id"])
         elif action == "watched":
-            watched = state.finished(v)
-            state.set_watched(v, on=not watched)
+            watched = state.finished(item)
+            state.set_watched(item, on=not watched)
             status = "Marked unwatched" if watched else "Marked watched"
         elif action == "copy":
-            subprocess.run(["wl-copy", url(v)], check=False)
-            status = f"Copied {url(v)}"
+            subprocess.run(["wl-copy", url(item)], check=False)
+            status = f"Copied {url(item)}"
 
 
 # --- FreeTube import ---------------------------------------------------------
@@ -775,10 +909,10 @@ def main():
     if args.cmd == "search":
         query = " ".join(args.query).strip()
         if not query:
-            _, _, query = rofi([], "search YouTube", "type a query and press ⏎")
-            query = query.strip()
-            if not query:
-                return
+            # an empty list: Enter on the typed text searches YouTube
+            stack.append(View("search YouTube", list))
+            run(stack, mode="insert")
+            return
         stack.append(View(f"search: {query}", lambda: search(query)))
     run(stack)
 
