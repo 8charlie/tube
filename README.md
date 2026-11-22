@@ -44,7 +44,7 @@ The flake exposes `packages.<system>.default` and a home-manager module:
 
 ```nix
 {
-  inputs.tube.url = "github:<you>/tube";  # or git+file:///path/to/tube
+  inputs.tube.url = "github:8charlie/tube";
 
   # in a home-manager configuration
   imports = [inputs.tube.homeManagerModules.default];
