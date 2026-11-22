@@ -302,10 +302,10 @@ ShellRoot {
 
     function searchTyped() {
         const query = input.text.trim();
+        if (!query)  // nothing to search for: done, with the (cleared) filter
+            return leaveInsert();
         Object.assign(view, beforeInsert);  // what was typed is a query, not a filter
         leaveInsert();
-        if (!query)
-            return show(true);
         if (view.kind === "prompt")
             stack.pop();
         push(makeView("search", {query: query}));
@@ -372,9 +372,9 @@ ShellRoot {
         if (key === Qt.Key_Escape || (ctrl && key === Qt.Key_G))
             leaveInsert();
         else if (enter && ctrl)
-            searchTyped();
-        else if (enter || (ctrl && key === Qt.Key_M))
             rows.count ? leaveInsert() : searchTyped();
+        else if (enter || (ctrl && key === Qt.Key_M))
+            searchTyped();
         else if (key === Qt.Key_Down || (ctrl && (key === Qt.Key_J || key === Qt.Key_N)))
             move(1);
         else if (key === Qt.Key_Up || (ctrl && (key === Qt.Key_K || key === Qt.Key_P)))
@@ -410,8 +410,8 @@ ShellRoot {
     readonly property var hints: {
         if (mode === "insert")
             return [
-                ["insert", [["Esc or Enter", "done, keeping the filter"], ["Ctrl+j/k", "move"]]],
-                ["search", [["Ctrl+Enter", "search YouTube"], ["Enter", "also does when nothing matches"]]],
+                ["insert", [["Esc or Ctrl+Enter", "done, keeping the filter"], ["Ctrl+j/k", "move"]]],
+                ["search", [["Enter", "search YouTube"], ["Ctrl+Enter", "also does when nothing matches"]]],
                 ["", []],
             ];
         if (channels)

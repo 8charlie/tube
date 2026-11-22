@@ -45,8 +45,8 @@ Insert mode:
 | Key | Action |
 |---|---|
 | typing | filters the list |
-| Esc or Enter | back to normal mode, keeping the filter (Enter also selects the highlighted row) |
-| Enter with nothing matching, or Ctrl+Enter | search YouTube for the typed text |
+| Enter | search YouTube for the typed text |
+| Esc or Ctrl+Enter | back to normal mode, keeping the filter (Ctrl+Enter searches instead when nothing matches) |
 | Ctrl+j / Ctrl+k | down / up |
 | Ctrl+h / Ctrl+l | cursor left / right |
 
