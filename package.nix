@@ -3,6 +3,7 @@
   runCommand,
   makeWrapper,
   python3,
+  libnotify,
   mpv,
   quickshell,
   wl-clipboard,
@@ -23,5 +24,5 @@ runCommand "tube" {
   install -Dm644 ${./tube_progress.lua} $out/share/tube/tube_progress.lua
   makeWrapper ${python3}/bin/python3 $out/bin/tube \
     --add-flags "-I $out/share/tube/tube.py" \
-    --prefix PATH : ${lib.makeBinPath [mpv quickshell wl-clipboard yt-dlp]}
+    --prefix PATH : ${lib.makeBinPath [libnotify mpv quickshell wl-clipboard yt-dlp]}
 ''

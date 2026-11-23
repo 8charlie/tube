@@ -11,11 +11,14 @@ is mpv, which itself goes through yt-dlp.
 """
 
 import argparse
+import collections
 import concurrent.futures as cf
 import fcntl
 import hashlib
 import json
 import os
+import re
+import signal
 import subprocess
 import sys
 import threading
@@ -544,7 +547,7 @@ def launch(start):
 
 def play(v, state):
     PROGRESS.mkdir(parents=True, exist_ok=True)
-    args = ["mpv", "--force-window=immediate", f"--force-media-title={v['title']}",
+    args = ["--force-window=immediate", f"--force-media-title={v['title']}",
             f"--script={PROGRESS_SCRIPT}",
             f"--script-opts-append=tube-id={v['id']}",
             f"--script-opts-append=tube-progress-dir={PROGRESS}"]
@@ -559,9 +562,52 @@ def play(v, state):
             pass
     if resume and resume[1] == "tube":
         args.append(f"--start={resume[0]:.1f}")
-    subprocess.Popen(args + [url(v)], stdin=subprocess.DEVNULL,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     start_new_session=True)
+    # the picker quits right away, so `tube mpv` waits for mpv instead
+    subprocess.Popen([sys.executable, "-I", str(Path(__file__).resolve()), "mpv",
+                      v["title"], *args, url(v)],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def run_mpv(title, args):
+    """Run mpv and, if it fails, say why in a desktop notification. Otherwise
+    a failed play looks like a crash: mpv's window opens and closes."""
+    proc = subprocess.Popen(["mpv", *args], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, errors="replace")
+    tail = collections.deque(maxlen=100)  # mpv prints its messages on stdout
+    for line in proc.stdout:
+        tail.append(line.strip())
+    reason = mpv_failure(proc.wait(), list(tail))
+    if reason:
+        try:
+            subprocess.run(["notify-send", "--app-name=tube", "--icon=mpv",
+                            f"Can't play {title}", reason], check=False)
+        except FileNotFoundError:
+            pass
+
+
+def mpv_failure(code, lines):
+    """Why mpv failed, from its exit code and last lines of output, or None
+    if it didn't: it exits 0 when you quit and 4 on SIGTERM / SIGINT."""
+    if code < 0:
+        return f"mpv died: {signal.strsignal(-code) or f'signal {-code}'}"
+    if code not in (1, 2, 3):
+        return None
+    errors = [line for line in lines if "ERROR: " in line]
+    if errors:
+        # yt-dlp's "[ytdl_hook] ERROR: [youtube] <id>: <message>". The
+        # message's first sentences are the reason; the rest is advice about
+        # yt-dlp flags, with links.
+        msg = re.sub(r"^.*?ERROR: (\[\w+\] [\w-]+: )?", "", errors[-1])
+        reason = ""
+        for sentence in re.split(r"(?<=[.!?]) +", msg):
+            if reason and len(reason) + len(sentence) > 120:
+                break
+            reason = f"{reason} {sentence}".strip()
+        return reason if len(reason) <= 200 else reason[:199] + "…"
+    lines = [line for line in lines if line and not line.startswith("Exiting...")]
+    return lines[-1] if lines else f"mpv exited with status {code}"
 
 
 # --- FreeTube import ---------------------------------------------------------
@@ -653,6 +699,12 @@ def import_freetube(directory):
 # --- entry point -------------------------------------------------------------
 
 def main():
+    # `tube mpv TITLE MPV-ARGS...`, from play(). Not argparse, which would
+    # take a title starting with "-" for an option.
+    if sys.argv[1:2] == ["mpv"]:
+        run_mpv(sys.argv[2], sys.argv[3:])
+        return
+
     parser = argparse.ArgumentParser(prog="tube", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="cmd")
     p = sub.add_parser("search", help="search YouTube")

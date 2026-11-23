@@ -108,6 +108,11 @@ refreshes the feed every `programs.tube.refreshInterval` (default `20min`).
 
 ## Notes
 
+- When mpv can't play a video, tube says why in a desktop notification.
+  YouTube's "Sign in to confirm you're not a bot" usually means it has
+  flagged your IP, which happens a lot with VPNs; a different server, or
+  `ytdl-raw-options=cookies-from-browser=<browser>` in `mpv.conf`, gets
+  around it.
 - Recommended `mpv.conf` line for YouTube:
   `stream-lavf-o=reconnect_on_http_error=403,request_size=10485760,multiple_requests=1`
   - Fresh googlevideo URLs answer 403 for their first few seconds and mpv
