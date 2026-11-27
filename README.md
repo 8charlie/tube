@@ -2,6 +2,8 @@
 
 A Quickshell front-end for YouTube that plays everything in mpv.
 
+  ![tube showing the subscription feed](screenshots/feed.png)
+
 - **Feed:** your subscriptions from YouTube's RSS feed.
 - **Search and channel pages:** yt-dlp.
 - **Playback:** mpv, with a small script (`tube_progress.lua`) that saves
